@@ -36,9 +36,10 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.Map;
 
+import jakarta.validation.Valid;
 
 @RestController
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = {"http://localhost:3000", "https://serve-v1.evean.net"}, allowCredentials = "true")
 public class FulfillmentController {
 
     private final FulfillmentService fulfillmentService;
@@ -57,7 +58,7 @@ public class FulfillmentController {
     )
     @PostMapping("/fulfillment/{needId}")
     public ResponseEntity<Fulfillment> createFulfillment( @PathVariable String needId,
-            @RequestBody FulfillmentRequest request,
+            @Valid @RequestBody FulfillmentRequest request,
             @RequestHeader Map<String, String> headers) {
 
         Fulfillment response = fulfillmentService.createFulfillment(request);

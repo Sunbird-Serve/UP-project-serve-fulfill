@@ -2,6 +2,8 @@ package com.sunbird.serve.fulfill.VolunteeringService.services;
 
 import com.sunbird.serve.fulfill.NominationMapper;
 import com.sunbird.serve.fulfill.VolunteeringService.repositories.NominationRepository;
+import com.sunbird.serve.fulfill.exception.ExternalServiceException;
+import com.sunbird.serve.fulfill.exception.ServiceException;
 import com.sunbird.serve.fulfill.models.needresponse.NeedResponse;
 import com.sunbird.serve.fulfill.models.userresponse.UserResponse;
 import jakarta.mail.MessagingException;
@@ -32,6 +34,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.*;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpHeaders;
 import reactor.core.publisher.Mono;
@@ -102,9 +105,18 @@ public class NominationService {
                     .block();
             // Save the entity
             return nominationRepository.save(nomination);
+        } catch (WebClientResponseException e) {
+            logger.error("External service error while nominating need: {}", e.getMessage(), e);
+            throw new ExternalServiceException(
+                "Failed to update need status", 
+                "NEED_SERVICE_ERROR", 
+                "serve-need", 
+                HttpStatus.valueOf(e.getStatusCode().value()), 
+                serveNeedUrl + "/api/v1/serve-need/need/status/" + nominationRequest.getNeedId()
+            );
         } catch (Exception e) {
             logger.error("Failed to nominate need: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to nominate need", e);
+            throw new ServiceException("Failed to nominate need", "NOMINATION_CREATION_ERROR", "nomination-service", e);
         }
     }
 
@@ -215,9 +227,18 @@ public class NominationService {
             }
 
             return needPlanId;
-        }catch (Exception e) {
+        }catch (WebClientResponseException e) {
+            logger.error("External service error while creating need plan: {}", e.getMessage(), e);
+            throw new ExternalServiceException(
+                "Failed to create need plan", 
+                "NEED_SERVICE_ERROR", 
+                "serve-need", 
+                HttpStatus.valueOf(e.getStatusCode().value()), 
+                serveNeedUrl + "/api/v1/serve-need/need-plan/create"
+            );
+        } catch (Exception e) {
             logger.error("Failed to get need plan created from fulfill ms: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to create need plan from fulfill ms", e);
+            throw new ServiceException("Failed to create need plan from fulfill ms", "NEED_PLAN_CREATION_ERROR", "nomination-service", e);
         }
     }
 
@@ -242,9 +263,18 @@ public class NominationService {
             request.setCoordUserId(needRequest.getUserId());
             request.setFulfillmentStatus(FulfillmentStatus.InProgress);
             fulfillmentService.createFulfillment(request);
-        }catch (Exception e) {
+        }catch (WebClientResponseException e) {
+            logger.error("External service error while creating fulfillment details: {}", e.getMessage(), e);
+            throw new ExternalServiceException(
+                "Failed to fetch need details for fulfillment", 
+                "NEED_SERVICE_ERROR", 
+                "serve-need", 
+                HttpStatus.valueOf(e.getStatusCode().value()), 
+                serveNeedUrl + "/api/v1/serve-need/need/" + needId
+            );
+        } catch (Exception e) {
             logger.error("Failed to create fulfillment: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to create fulfillment", e);
+            throw new ServiceException("Failed to create fulfillment", "FULFILLMENT_CREATION_ERROR", "nomination-service", e);
         }
      }
 
@@ -281,7 +311,7 @@ public class NominationService {
                             nominatedUserResponse.getIdentityDetails().getFullname()
                     );
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    logger.error("Failed to send email to coordinator for needId: {} and nominatedUserId: {}", needId, nominatedUserId, e);
                 }
             });
 }
@@ -328,14 +358,14 @@ public class NominationService {
         try {
             sendEmailToNCoordinator(nCoordinatorName, ncoordinatorEmail, description, nominatedUserName);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Failed to send email to coordinator: {}", ncoordinatorEmail, e);
         }
         return CompletableFuture.completedFuture(null);
     }
 
     public void sendEmailToNCoordinator(String nCoordinatorName, String ncoordinatorEmail, String description, String nominatedUserName) {
-        MimeMessage mimeMessage = javaMailSender.createMimeMessage();
         try {
+            MimeMessage mimeMessage = javaMailSender.createMimeMessage();
             MimeMessageHelper mimeMessageHelper = new MimeMessageHelper(mimeMessage, true, "utf-8");
             String subject = emailTemplateService.getNCoordinatorEmailSubject();
             String body = emailTemplateService.getNCoordinatorEmailBody(nCoordinatorName, nominatedUserName, description);
@@ -344,7 +374,7 @@ public class NominationService {
             mimeMessageHelper.setText(body, true);
             javaMailSender.send(mimeMessage);
         } catch (MessagingException e) {
-            e.printStackTrace();
+            logger.error("Failed to send email to coordinator: {}", ncoordinatorEmail, e);
         }
     }
 
@@ -354,14 +384,14 @@ public class NominationService {
         try {
             sendEmailToNominatedUser(nominatedUserName, nominatedUserEmail);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Failed to send email to nominated user: {}", nominatedUserEmail, e);
         }
         return CompletableFuture.completedFuture(null);
     }
 
     public void sendEmailToNominatedUser(String nominatedUserName, String nominatedUserEmail) {
-        MimeMessage mimeMessage = javaMailSender.createMimeMessage();
         try {
+            MimeMessage mimeMessage = javaMailSender.createMimeMessage();
             MimeMessageHelper mimeMessageHelper = new MimeMessageHelper(mimeMessage, true, "utf-8");
             String subject = emailTemplateService.getNominatedUserEmailSubject();
             String body = emailTemplateService.getNominatedUserEmailBody(nominatedUserName);
@@ -370,7 +400,7 @@ public class NominationService {
             mimeMessageHelper.setText(body, true);
             javaMailSender.send(mimeMessage);
         } catch (MessagingException e) {
-            e.printStackTrace();
+            logger.error("Failed to send email to nominated user: {}", nominatedUserEmail, e);
         }
     }
 
@@ -381,7 +411,7 @@ public class NominationService {
         try {
             sendEmailToVolunteer(nominatedUserId, status, needId);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Failed to send email to volunteer: {} for needId: {}", nominatedUserId, needId, e);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -403,7 +433,7 @@ public class NominationService {
             mimeMessageHelper.setText(body, true);
             javaMailSender.send(mimeMessage);
         } catch (MessagingException e) {
-            e.printStackTrace();
+            logger.error("Failed to send email to volunteer: {} for needId: {}", nominatedUserId, needId, e);
         }
     }
 
