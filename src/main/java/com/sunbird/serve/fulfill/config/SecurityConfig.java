@@ -8,7 +8,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -58,7 +58,7 @@ public class SecurityConfig {
                 .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter))
                 .authenticationEntryPoint(securityErrorHandler)
             )
-            .addFilterAfter(jwtTenantFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterAfter(jwtTenantFilter, BearerTokenAuthenticationFilter.class);
 
         return http.build();
     }

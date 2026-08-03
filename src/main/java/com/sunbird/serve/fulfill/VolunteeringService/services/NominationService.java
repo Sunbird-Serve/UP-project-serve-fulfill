@@ -70,6 +70,17 @@ public class NominationService {
 
     private static final Logger logger = LoggerFactory.getLogger(NominationService.class);
 
+    /**
+     * Extracts only the Authorization header for forwarding to downstream services.
+     * Avoids forwarding host, origin, referer etc. which can confuse reverse proxies.
+     */
+    private void forwardAuthHeader(HttpHeaders httpHeaders, Map<String, String> headers) {
+        String auth = headers.get("authorization");
+        if (auth != null) {
+            httpHeaders.set(HttpHeaders.AUTHORIZATION, auth);
+        }
+    }
+
     @Autowired
     public NominationService(NominationRepository nominationRepository,
                              WebClient.Builder webClientBuilder, NeedPlanRequest needPlanRequest,
@@ -99,7 +110,7 @@ public class NominationService {
             webClient.put()
                     .uri(apiNeedUrl)
                     .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                    .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                    .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                     .retrieve()
                     .toBodilessEntity()
                     .block();
@@ -146,7 +157,7 @@ public class NominationService {
         webClient.put()
             .uri(apiUserUrl)
             .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-            .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+            .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
             .body(BodyInserters.fromValue(userStatusRequest))
             .retrieve()
             .bodyToMono(Void.class)
@@ -171,7 +182,7 @@ public class NominationService {
         webClient.put()
                     .uri(apiNeedUrl)
                     .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                    .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                    .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                     .retrieve()
                     .toBodilessEntity()
                     .block();
@@ -196,7 +207,7 @@ public class NominationService {
             // Get Need details
             NeedRequest needRequest = webClient.get()
                     .uri(apiNeedUrl, needId)
-                    .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                    .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                     .retrieve()
                     .bodyToMono(NeedRequest.class)
                     .block();
@@ -205,7 +216,7 @@ public class NominationService {
             // Get Need Requirement details
             NeedRequirementRequest needRequirementRequest = webClient.get()
                     .uri(apiNeedReqUrl, needRequest.getRequirementId())
-                    .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                    .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                     .retrieve()
                     .bodyToMono(NeedRequirementRequest.class)
                     .block();
@@ -219,7 +230,7 @@ public class NominationService {
             ResponseEntity<NeedPlan> responseEntity = webClient.post()
                     .uri(apiUrl)
                     .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                    .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                    .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                     .body(Mono.just(request), NeedPlanRequest.class)
                     .exchangeToMono(response -> response.toEntity(NeedPlan.class))
                     .block();
@@ -256,7 +267,7 @@ public class NominationService {
             // Get Need details
             NeedRequest needRequest = webClient.get()
                     .uri(apiNeedUrl, needId)
-                    .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                    .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                     .retrieve()
                     .bodyToMono(NeedRequest.class)
                     .block();
@@ -454,7 +465,7 @@ public class NominationService {
     public List<UserResponse> getRecommendedVolunteersNotNominated(Map<String, String> headers) {
         UserResponse[] allVolunteers = webClient.get()
                 .uri("/api/v1/serve-volunteering/user/status?status=Recommended")
-                .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                 .retrieve()
                 .bodyToMono(UserResponse[].class)
                 .block();
@@ -486,7 +497,7 @@ public class NominationService {
     public List<UserResponse> getRecommendedVolunteersNominated(Map<String, String> headers) {
         UserResponse[] allVolunteers = webClient.get()
                 .uri("/api/v1/serve-volunteering/user/status?status=Recommended")
-                .headers(httpHeaders -> headers.forEach(httpHeaders::set))
+                .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
                 .retrieve()
                 .bodyToMono(UserResponse[].class)
                 .block();
