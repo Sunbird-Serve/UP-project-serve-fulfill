@@ -93,6 +93,28 @@ public class EmailTemplateService {
         );
     }
 
+    public String getVolunteerDropEmailSubject() {
+        return "Volunteer has dropped out of a Need";
+    }
+
+    public String getVolunteerDropEmailBody(String coordUserName, String volunteerName, String needDescription, String reason) {
+        return String.format(
+            "Dear %s,<br><br>" +
+            "A volunteer has dropped out of a class (Need) on the SERVE platform." +
+            "<br><br>" +
+            "<strong>Volunteer Name:</strong> %s<br>" +
+            "<strong>Need:</strong> %s<br>" +
+            "<strong>Reason:</strong> %s" +
+            "<br><br>" +
+            "The remaining sessions have been paused. The Need is open again so that a new volunteer can be nominated and confirmed." +
+            "<br><br>" +
+            "Warm regards,<br>" +
+            "Admin<br>" +
+            "Sunbird SERVE",
+            coordUserName, volunteerName, needDescription, reason
+        );
+    }
+
     public String getVolunteerEmailSubject(NominationStatus status) {
         if (status == NominationStatus.Approved) {
             return "Confirmation: Your Volunteer Need Nomination";

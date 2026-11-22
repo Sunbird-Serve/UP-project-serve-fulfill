@@ -99,6 +99,17 @@ public class NominationController {
         return ResponseEntity.ok(nominations);
     }
 
+    @Operation(summary = "Drop an approved volunteer", description = "Pauses the volunteer's sessions and marks the nomination Backfill")
+    @PostMapping("/nomination/{nominationId}/drop-volunteer")
+    @PreAuthorize("hasAnyRole('sAdmin', 'nAdmin', 'nCoordinator', 'vAdmin', 'vCoordinator', 'Volunteer')")
+    public ResponseEntity<com.sunbird.serve.fulfill.models.request.DropVolunteerResponse> dropVolunteer(
+            @PathVariable String nominationId,
+            @jakarta.validation.Valid @RequestBody com.sunbird.serve.fulfill.models.request.DropVolunteerRequest request,
+            @RequestHeader Map<String, String> headers,
+            org.springframework.security.core.Authentication authentication) {
+        return ResponseEntity.ok(nominationService.dropVolunteer(nominationId, request.getComments(), headers, authentication));
+    }
+
     @GetMapping("/nomination/{needId}/nominate")
     public ResponseEntity<List<Nomination>> getAllNominations(@PathVariable String needId, @RequestHeader Map<String, String> headers) {
         List<Nomination> nominations = nominationService.getAllNominations(needId, headers);

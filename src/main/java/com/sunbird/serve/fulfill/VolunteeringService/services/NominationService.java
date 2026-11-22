@@ -4,6 +4,8 @@ import com.sunbird.serve.fulfill.NominationMapper;
 import com.sunbird.serve.fulfill.VolunteeringService.repositories.NominationRepository;
 import com.sunbird.serve.fulfill.exception.ExternalServiceException;
 import com.sunbird.serve.fulfill.exception.ServiceException;
+import com.sunbird.serve.fulfill.exception.ApiException;
+import com.sunbird.serve.fulfill.models.request.DropVolunteerResponse;
 import com.sunbird.serve.fulfill.models.needresponse.NeedResponse;
 import com.sunbird.serve.fulfill.models.userresponse.UserResponse;
 import jakarta.mail.MessagingException;
@@ -61,6 +63,9 @@ public class NominationService {
     private final String serveNeedUrl;
     private final String serveVolunteeringUserUrl;
     private final RestTemplate restTemplate;
+
+    @Autowired
+    private com.sunbird.serve.fulfill.FulfillmentRepository fulfillmentRepository;
 
     @Autowired
     private JavaMailSender javaMailSender;
@@ -195,6 +200,146 @@ public class NominationService {
             createFulfillmentDetails(fulfillmentRequest, nomination.getNeedId(), needPlanId, nomination.getNominatedUserId(), headers);
         }
         return nominationRepository.save(nomination);
+    }
+
+    /**
+     * Drops an approved volunteer: pauses the sessions of their need plans via the need service,
+     * then marks the nomination Backfill. Safe to retry when the nomination is already Backfill.
+     */
+    public DropVolunteerResponse dropVolunteer(String nominationId, String comments, Map<String, String> headers,
+                                               org.springframework.security.core.Authentication authentication) {
+        if (comments == null || comments.trim().isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "A reason for dropping the volunteer is required");
+        }
+
+        Nomination nomination;
+        try {
+            nomination = nominationRepository.findById(UUID.fromString(nominationId)).orElse(null);
+        } catch (IllegalArgumentException e) {
+            nomination = null;
+        }
+        if (nomination == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "Nomination not found");
+        }
+
+        // A caller without a staff role (i.e. a Volunteer) may only drop their own nomination.
+        boolean droppedByVolunteer = !isStaffCaller(authentication);
+        if (droppedByVolunteer && !isNominationOwner(authentication, nomination)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "You can only drop your own nomination");
+        }
+
+        NominationStatus current = nomination.getNominationStatus();
+        if (current != NominationStatus.Approved && current != NominationStatus.Backfill) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                    "Only an approved volunteer can be dropped. Current nomination status: " + current);
+        }
+
+        List<String> needPlanIds = new ArrayList<>();
+        for (com.sunbird.serve.fulfill.models.Nomination.Fulfillment f :
+                fulfillmentRepository.findAllByNeedIdAndAssignedUserId(nomination.getNeedId(), nomination.getNominatedUserId())) {
+            String planId = f.getNeedPlanId();
+            if (planId != null && !planId.trim().isEmpty() && !needPlanIds.contains(planId)) {
+                needPlanIds.add(planId);
+            }
+        }
+        if (needPlanIds.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "No need plan found for this volunteer and need");
+        }
+
+        int sessionsPaused = 0;
+        Map<String, String> body = new HashMap<>();
+        body.put("reason", comments.trim());
+        for (String needPlanId : needPlanIds) {
+            String url = serveNeedUrl + "/api/v1/serve-need/need-plan/" + needPlanId + "/drop-volunteer";
+            try {
+                Map<?, ?> result = webClient.put()
+                        .uri(url)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                        .headers(httpHeaders -> forwardAuthHeader(httpHeaders, headers))
+                        .bodyValue(body)
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block();
+                if (result != null && result.get("pausedSessions") instanceof Number) {
+                    sessionsPaused += ((Number) result.get("pausedSessions")).intValue();
+                }
+            } catch (Exception e) {
+                logger.error("Need service failed to pause plan {} for nomination {}: {}", needPlanId, nominationId, e.getMessage(), e);
+                throw new ExternalServiceException(
+                        "Could not pause the volunteer's sessions. The nomination was not changed. Please try again.",
+                        "NEED_SERVICE_ERROR", "serve-need", HttpStatus.BAD_GATEWAY, url);
+            }
+        }
+
+        // Last step, so a failure above leaves the Drop button available for a retry.
+        nomination.setNominationStatus(NominationStatus.Backfill);
+        nomination.setComments(comments.trim());
+        nominationRepository.save(nomination);
+
+        if (droppedByVolunteer) {
+            notifyCoordinatorOfDrop(nomination.getNeedId(), nomination.getNominatedUserId(), comments.trim());
+        }
+
+        return new DropVolunteerResponse(nomination.getId().toString(), NominationStatus.Backfill.name(), sessionsPaused);
+    }
+
+    private static final Set<String> STAFF_AUTHORITIES = Set.of(
+            "ROLE_sAdmin", "ROLE_nAdmin", "ROLE_nCoordinator", "ROLE_vAdmin", "ROLE_vCoordinator");
+
+    private boolean isStaffCaller(org.springframework.security.core.Authentication authentication) {
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(a -> STAFF_AUTHORITIES.contains(a.getAuthority()));
+    }
+
+    /** Owner means the token subject equals the nominated user id, or the token email matches that user's email. */
+    private boolean isNominationOwner(org.springframework.security.core.Authentication authentication, Nomination nomination) {
+        if (!(authentication instanceof org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken jwtAuth)) {
+            return false;
+        }
+        org.springframework.security.oauth2.jwt.Jwt jwt = jwtAuth.getToken();
+        String nominatedUserId = nomination.getNominatedUserId();
+        if (nominatedUserId == null) {
+            return false;
+        }
+        if (nominatedUserId.equals(jwt.getSubject())) {
+            return true;
+        }
+        String tokenEmail = jwt.getClaimAsString("email");
+        if (tokenEmail == null || tokenEmail.isBlank()) {
+            return false;
+        }
+        try {
+            UserResponse user = fetchUserResponse(nominatedUserId);
+            String userEmail = user.getContactDetails().getEmail();
+            return userEmail != null && userEmail.trim().equalsIgnoreCase(tokenEmail.trim());
+        } catch (Exception e) {
+            logger.warn("Could not verify nomination ownership for nomination user {}: {}", nominatedUserId, e.getMessage());
+            return false;
+        }
+    }
+
+    /** Fire-and-forget. Any failure is logged and never affects the drop. */
+    private void notifyCoordinatorOfDrop(String needId, String nominatedUserId, String reason) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                NeedResponse need = fetchNeedResponse(needId);
+                UserResponse coordinator = fetchUserResponse(need.getUserId());
+                UserResponse volunteer = fetchUserResponse(nominatedUserId);
+
+                MimeMessage mimeMessage = javaMailSender.createMimeMessage();
+                MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true, "utf-8");
+                helper.setTo(coordinator.getContactDetails().getEmail());
+                helper.setSubject(emailTemplateService.getVolunteerDropEmailSubject());
+                helper.setText(emailTemplateService.getVolunteerDropEmailBody(
+                        coordinator.getIdentityDetails().getFullname(),
+                        volunteer.getIdentityDetails().getFullname(),
+                        need.getDescription(),
+                        reason), true);
+                javaMailSender.send(mimeMessage);
+            } catch (Exception e) {
+                logger.error("Failed to email coordinator about volunteer drop for needId {}", needId, e);
+            }
+        });
     }
 
     private String callCreateNeedPlanApi(NeedPlanRequest request, String needId,
